@@ -1,0 +1,32 @@
+# Output files
+results/
+
+# Data (local only — not committed to avoid sharing proprietary data)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Environments
+.env
+.venv
+venv/
+env/
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
