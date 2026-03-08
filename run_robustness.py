@@ -36,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Run robustness checks')
     p.add_argument('--proxy',  type=str,  default=None,
                    help='Proxy URL, e.g. http://host:port')
+    p.add_argument('--source', type=str,  default='excel',
+                   choices=['excel', 'yfinance'],
+                   help='Data source: excel (default) or yfinance')
     p.add_argument('--seed',   type=int,  default=42,
                    help='Random seed for universe sampling')
     p.add_argument('--n-universe-samples', type=int, default=20,
@@ -282,7 +285,7 @@ def main() -> None:
     args = parse_args()
 
     print("Loading data …")
-    data        = load_all(proxy=args.proxy)
+    data        = load_all(proxy=args.proxy, source=args.source)
     ret         = data['ret']
     sevenfactor = data['sevenfactor']
 

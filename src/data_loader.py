@@ -20,6 +20,7 @@ import pandas as pd
 import pandas_datareader.data as web
 import requests
 import statsmodels.api as sm
+import yfinance as yf
 
 from .config import DATA_DIR, ASSETS
 
@@ -110,6 +111,98 @@ def load_asset_data(
 
     macros = ['dp', 'tbl', 'lty', 'aaa', 'baa']
     macro_df = raw[macros].resample('BM').last()
+
+    return df, macro_df, raw
+
+
+# ---------------------------------------------------------------------------
+# yfinance data
+# ---------------------------------------------------------------------------
+_FRED_MACRO_CODES = {
+    'tbl': 'TB3MS',     # 3-Month Treasury Bill
+    'lty': 'GS10',      # 10-Year Treasury Constant Maturity
+    'aaa': 'AAA',       # Moody's Aaa Corporate Bond Yield
+    'baa': 'BAA',       # Moody's Baa Corporate Bond Yield
+}
+
+
+def load_asset_data_yfinance(
+    assets: Optional[list[str]] = None,
+    start: str = '2007-01-01',
+    end: Optional[str] = None,
+    proxy: Optional[str] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load asset price data from yfinance and macro predictors from FRED.
+
+    Parameters
+    ----------
+    assets : list of ETF ticker symbols (default: ASSETS from config)
+    start  : download start date
+    end    : download end date (default: today)
+    proxy  : optional proxy URL
+
+    Returns
+    -------
+    df       : monthly asset prices (BM frequency)
+    macro_df : monthly macro predictors (tbl, lty, aaa, baa, dp)
+    raw      : daily DataFrame with all asset prices
+    """
+    if assets is None:
+        assets = ASSETS
+
+    # --- Asset prices from yfinance ---
+    # Include VCLT (needed by build_seven_factor) even if not in assets
+    extra_tickers = [t for t in ['VCLT'] if t not in assets]
+    download_tickers = assets + extra_tickers
+
+    raw = yf.download(
+        download_tickers,
+        start=start,
+        end=end,
+        proxy=proxy,
+        progress=False,
+    )['Close']
+
+    # yf.download returns MultiIndex columns for multiple tickers;
+    # ensure column order matches the requested tickers list
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw = raw.droplevel(0, axis=1)
+    raw = raw[download_tickers]
+    raw.index = pd.to_datetime(raw.index)
+    raw.index.name = 'Date'
+
+    df = raw[assets].resample('BM').last()
+
+    # --- Macro predictors from FRED ---
+    kwargs: dict = {}
+    session = _make_session(proxy)
+    if session is not None:
+        kwargs['session'] = session
+
+    macro_parts = {}
+    for name, fred_code in _FRED_MACRO_CODES.items():
+        series = web.DataReader(fred_code, 'fred', start=start, **kwargs)
+        macro_parts[name] = series.iloc[:, 0]  # keep as % (consistent with Excel source)
+
+    macro_raw = pd.DataFrame(macro_parts)
+
+    # Dividend-price ratio (dp): approximate from S&P 500 ETF (VOO / SPY)
+    # Trailing 12-month dividend yield in %, consistent with Excel source
+    sp_ticker = 'VOO' if 'VOO' in assets else 'SPY'
+    sp = yf.Ticker(sp_ticker)
+    divs = sp.dividends
+    if divs is not None and len(divs) > 0:
+        divs.index = divs.index.tz_localize(None)
+        annual_div = divs.resample('BM').sum().rolling(12).sum()
+        sp_price = raw[sp_ticker].resample('BM').last()
+        dp = (annual_div / sp_price * 100).dropna()
+        dp.name = 'dp'
+        macro_raw = macro_raw.join(dp)
+    else:
+        macro_raw['dp'] = np.nan
+
+    macro_df = macro_raw.resample('BM').last()
 
     return df, macro_df, raw
 
@@ -251,6 +344,7 @@ def load_all(
     ff_start: str = '1970-01-01',
     proxy: Optional[str] = None,
     assets: Optional[list[str]] = None,
+    source: str = 'excel',
 ) -> dict:
     """
     Load and assemble all datasets.
@@ -261,6 +355,7 @@ def load_all(
     ff_start  : start date for Fama-French download
     proxy     : optional proxy URL, e.g. 'http://host:port'
     assets    : asset ticker list (default: ASSETS from config)
+    source    : 'excel' (default) or 'yfinance'
 
     Returns
     -------
@@ -272,7 +367,14 @@ def load_all(
         macrofactor, sevenfactor
     """
     fivefactor, riskfree, mkt_daily = load_ff_factors(start=ff_start, proxy=proxy)
-    df, macro_df, raw               = load_asset_data(filepath=data_file, assets=assets)
+
+    if source == 'yfinance':
+        df, macro_df, raw = load_asset_data_yfinance(
+            assets=assets, start=ff_start, proxy=proxy,
+        )
+    else:
+        df, macro_df, raw = load_asset_data(filepath=data_file, assets=assets)
+
     ret, price                      = build_returns(df, riskfree)
     mkt, vol                        = build_market_states(fivefactor, mkt_daily)
     macrofactor                     = build_macro_factors(macro_df)

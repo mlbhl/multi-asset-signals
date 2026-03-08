@@ -33,8 +33,11 @@ from src.portfolio import generate_results
 # ============================================================
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Run driving forces analysis')
-    p.add_argument('--proxy', type=str, default=None,
+    p.add_argument('--proxy',  type=str, default=None,
                    help='Proxy URL, e.g. http://host:port')
+    p.add_argument('--source', type=str, default='excel',
+                   choices=['excel', 'yfinance'],
+                   help='Data source: excel (default) or yfinance')
     return p.parse_args()
 
 
@@ -204,7 +207,7 @@ def main() -> None:
     args = parse_args()
 
     print("Loading data …")
-    data = load_all(proxy=args.proxy)
+    data = load_all(proxy=args.proxy, source=args.source)
 
     ret         = data['ret']
     mkt         = data['mkt']

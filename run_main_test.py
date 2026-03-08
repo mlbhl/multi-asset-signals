@@ -35,6 +35,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description='Run main signal-portfolio test')
     p.add_argument('--proxy',   type=str,  default=None,
                    help='Proxy URL, e.g. http://host:port')
+    p.add_argument('--source',  type=str,  default='excel',
+                   choices=['excel', 'yfinance'],
+                   help='Data source: excel (default) or yfinance')
     p.add_argument('--no-chart', action='store_true',
                    help='Skip chart rendering')
     return p.parse_args()
@@ -61,7 +64,7 @@ def main() -> None:
     # 1. Load data
     # ------------------------------------------------------------------
     print("Loading data …")
-    data = load_all(proxy=args.proxy)
+    data = load_all(proxy=args.proxy, source=args.source)
 
     ret        = data['ret']
     price      = data['price']
