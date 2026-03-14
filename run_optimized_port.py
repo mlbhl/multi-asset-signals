@@ -10,8 +10,12 @@ Output saved to: results/optimized_port_YYYYMMDD.xlsx
 from __future__ import annotations
 
 import argparse
+import os
 import warnings
 warnings.filterwarnings('ignore')
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from datetime import date
 
@@ -40,8 +44,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--proxy',       type=str,   default=None,
                    help='Proxy URL, e.g. http://host:port')
     p.add_argument('--source',      type=str,   default='excel',
-                   choices=['excel', 'yfinance'],
-                   help='Data source: excel (default) or yfinance')
+                   choices=['excel', 'yfinance', 'alphavantage', 'eodhd'],
+                   help='Data source: excel (default), yfinance, alphavantage, or eodhd')
+    p.add_argument('--av-api-key', type=str,
+                   default=os.environ.get('ALPHA_VANTAGE_API_KEY'),
+                   help='Alpha Vantage API key (default: from .env)')
+    p.add_argument('--eodhd-api-key', type=str,
+                   default=os.environ.get('EODHD_API_KEY'),
+                   help='EODHD API key (default: from .env)')
     p.add_argument('--h-period',    type=int,   default=1,
                    help='Weight-smoothing holding period (months)')
     p.add_argument('--shrinkage',   type=float, default=0.5,
@@ -105,7 +115,9 @@ def main() -> None:
     # 1. Data
     # ------------------------------------------------------------------
     print("Loading data …")
-    data = load_all(proxy=args.proxy, source=args.source)
+    data = load_all(proxy=args.proxy, source=args.source,
+                    av_api_key=getattr(args, 'av_api_key', None),
+                    eodhd_api_key=getattr(args, 'eodhd_api_key', None))
     ret  = data['ret']
 
     # ------------------------------------------------------------------

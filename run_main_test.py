@@ -7,8 +7,12 @@ Output saved to: results/main_test_YYYYMMDD.xlsx
 from __future__ import annotations
 
 import argparse
+import os
 import warnings
 warnings.filterwarnings('ignore')
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from datetime import date
 from pathlib import Path
@@ -36,8 +40,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--proxy',   type=str,  default=None,
                    help='Proxy URL, e.g. http://host:port')
     p.add_argument('--source',  type=str,  default='excel',
-                   choices=['excel', 'yfinance'],
-                   help='Data source: excel (default) or yfinance')
+                   choices=['excel', 'yfinance', 'alphavantage', 'eodhd'],
+                   help='Data source: excel (default), yfinance, alphavantage, or eodhd')
+    p.add_argument('--av-api-key', type=str,
+                   default=os.environ.get('ALPHA_VANTAGE_API_KEY'),
+                   help='Alpha Vantage API key (default: from .env)')
+    p.add_argument('--eodhd-api-key', type=str,
+                   default=os.environ.get('EODHD_API_KEY'),
+                   help='EODHD API key (default: from .env)')
     p.add_argument('--no-chart', action='store_true',
                    help='Skip chart rendering')
     return p.parse_args()
@@ -64,7 +74,9 @@ def main() -> None:
     # 1. Load data
     # ------------------------------------------------------------------
     print("Loading data …")
-    data = load_all(proxy=args.proxy, source=args.source)
+    data = load_all(proxy=args.proxy, source=args.source,
+                    av_api_key=getattr(args, 'av_api_key', None),
+                    eodhd_api_key=getattr(args, 'eodhd_api_key', None))
 
     ret        = data['ret']
     price      = data['price']
@@ -216,6 +228,8 @@ def main() -> None:
         _write(_latest_weights(weights_lo), 'weights_lo_latest')
         _write(picks_ls,          'picks_ls')
         _write(picks_lo,          'picks_lo')
+        _write(weights_ls['comb'], 'weights_ls_comb_hist')
+        _write(weights_lo['comb'], 'weights_lo_comb_hist')
 
     print("Done.")
 

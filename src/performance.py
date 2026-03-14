@@ -268,7 +268,7 @@ def summary_stats(
         }
 
         if factor_ret is not None:
-            fr = factor_ret.loc[r.index].dropna()
+            fr = factor_ret.reindex(r.index).dropna()
             r_ = r.loc[fr.index]
             coef, tval, _ = factor_reg(fr, r_)
             row['alpha']        = float(coef[0]) * af

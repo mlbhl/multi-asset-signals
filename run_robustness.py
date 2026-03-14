@@ -12,9 +12,13 @@ Output saved to: results/robustness_YYYYMMDD.xlsx
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import warnings
 warnings.filterwarnings('ignore')
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from datetime import date
 from itertools import product
@@ -37,8 +41,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--proxy',  type=str,  default=None,
                    help='Proxy URL, e.g. http://host:port')
     p.add_argument('--source', type=str,  default='excel',
-                   choices=['excel', 'yfinance'],
-                   help='Data source: excel (default) or yfinance')
+                   choices=['excel', 'yfinance', 'alphavantage', 'eodhd'],
+                   help='Data source: excel (default), yfinance, alphavantage, or eodhd')
+    p.add_argument('--av-api-key', type=str,
+                   default=os.environ.get('ALPHA_VANTAGE_API_KEY'),
+                   help='Alpha Vantage API key (default: from .env)')
+    p.add_argument('--eodhd-api-key', type=str,
+                   default=os.environ.get('EODHD_API_KEY'),
+                   help='EODHD API key (default: from .env)')
     p.add_argument('--seed',   type=int,  default=42,
                    help='Random seed for universe sampling')
     p.add_argument('--n-universe-samples', type=int, default=20,
@@ -285,7 +295,9 @@ def main() -> None:
     args = parse_args()
 
     print("Loading data …")
-    data        = load_all(proxy=args.proxy, source=args.source)
+    data        = load_all(proxy=args.proxy, source=args.source,
+                           av_api_key=getattr(args, 'av_api_key', None),
+                           eodhd_api_key=getattr(args, 'eodhd_api_key', None))
     ret         = data['ret']
     sevenfactor = data['sevenfactor']
 

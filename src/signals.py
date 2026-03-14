@@ -254,4 +254,11 @@ def generate_average_weight(
     stacked  = pd.concat(weights)
     avg_wgt  = stacked.groupby(stacked.index).mean()
     avg_wgt  = avg_wgt.rolling(holding, min_periods=holding).mean().dropna()
+
+    # Rescale long-short only: gross notional = 2
+    has_short = (avg_wgt < 0).any(axis=1).any()
+    if has_short:
+        gross = avg_wgt.abs().sum(axis=1)
+        avg_wgt = avg_wgt.mul(2 / gross, axis=0)
+
     return avg_wgt

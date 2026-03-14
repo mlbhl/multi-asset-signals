@@ -15,6 +15,8 @@ warnings.filterwarnings('ignore')
 from pathlib import Path
 from typing import Optional
 
+import time
+
 import numpy as np
 import pandas as pd
 import pandas_datareader.data as web
@@ -208,6 +210,256 @@ def load_asset_data_yfinance(
 
 
 # ---------------------------------------------------------------------------
+# Alpha Vantage data
+# ---------------------------------------------------------------------------
+_AV_BASE_URL = 'https://www.alphavantage.co/query'
+
+
+def _av_monthly_prices(
+    ticker: str,
+    api_key: str,
+    proxy: Optional[str] = None,
+) -> pd.Series:
+    """Fetch full monthly adjusted close prices for a single ticker from Alpha Vantage."""
+    params = {
+        'function': 'TIME_SERIES_MONTHLY_ADJUSTED',
+        'symbol': ticker,
+        'apikey': api_key,
+    }
+    proxies = {'http': proxy, 'https': proxy} if proxy else None
+    resp = requests.get(_AV_BASE_URL, params=params, proxies=proxies, timeout=30)
+    data = resp.json()
+
+    if 'Monthly Adjusted Time Series' not in data:
+        note = data.get('Note', data.get('Information', str(data)))
+        raise RuntimeError(f'Alpha Vantage error for {ticker}: {note}')
+
+    ts = data['Monthly Adjusted Time Series']
+    series = (
+        pd.Series({k: float(v['5. adjusted close']) for k, v in ts.items()})
+        .rename(ticker)
+        .sort_index()
+    )
+    series.index = pd.to_datetime(series.index)
+    return series
+
+
+def load_asset_data_alphavantage(
+    api_key: str,
+    assets: Optional[list[str]] = None,
+    start: str = '2007-01-01',
+    end: Optional[str] = None,
+    proxy: Optional[str] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load asset price data from Alpha Vantage and macro predictors from FRED.
+
+    Parameters
+    ----------
+    api_key : Alpha Vantage API key (get free at alphavantage.co)
+    assets  : list of ETF ticker symbols (default: ASSETS from config)
+    start   : start date for filtering
+    end     : end date for filtering (default: today)
+    proxy   : optional proxy URL
+
+    Returns
+    -------
+    df       : monthly asset prices (BM frequency)
+    macro_df : monthly macro predictors (tbl, lty, aaa, baa, dp)
+    raw      : daily DataFrame with all asset prices
+    """
+    if assets is None:
+        assets = ASSETS
+
+    # --- Asset prices from Alpha Vantage ---
+    extra_tickers = [t for t in ['VCLT'] if t not in assets]
+    download_tickers = assets + extra_tickers
+
+    price_series = []
+    for i, ticker in enumerate(download_tickers):
+        if i > 0:
+            time.sleep(12)  # free tier: 5 requests/minute
+        price_series.append(_av_monthly_prices(ticker, api_key, proxy=proxy))
+
+    raw = pd.DataFrame(price_series).T
+    raw.index = pd.to_datetime(raw.index)
+    raw.index.name = 'Date'
+    raw = raw.sort_index()
+
+    if start:
+        raw = raw.loc[start:]
+    if end:
+        raw = raw.loc[:end]
+
+    df = raw[assets].resample('BM').last()
+
+    # --- Macro predictors from FRED (same as yfinance path) ---
+    kwargs: dict = {}
+    session = _make_session(proxy)
+    if session is not None:
+        kwargs['session'] = session
+
+    macro_parts = {}
+    for name, fred_code in _FRED_MACRO_CODES.items():
+        series = web.DataReader(fred_code, 'fred', start=start, **kwargs)
+        macro_parts[name] = series.iloc[:, 0]
+
+    macro_raw = pd.DataFrame(macro_parts)
+
+    # Dividend-price ratio (dp)
+    sp_ticker = 'VOO' if 'VOO' in assets else 'SPY'
+    sp_divs_params = {
+        'function': 'DIVIDENDS',
+        'symbol': sp_ticker,
+        'apikey': api_key,
+    }
+    proxies = {'http': proxy, 'https': proxy} if proxy else None
+    div_resp = requests.get(_AV_BASE_URL, params=sp_divs_params, proxies=proxies, timeout=30)
+    div_data = div_resp.json()
+
+    if 'data' in div_data and len(div_data['data']) > 0:
+        divs = pd.Series(
+            {r['ex_dividend_date']: float(r['amount']) for r in div_data['data']}
+        ).sort_index()
+        divs.index = pd.to_datetime(divs.index)
+        annual_div = divs.resample('BM').sum().rolling(12).sum()
+        sp_price = raw[sp_ticker].resample('BM').last()
+        dp = (annual_div / sp_price * 100).dropna()
+        dp.name = 'dp'
+        macro_raw = macro_raw.join(dp)
+    else:
+        macro_raw['dp'] = np.nan
+
+    macro_df = macro_raw.resample('BM').last()
+
+    return df, macro_df, raw
+
+
+# ---------------------------------------------------------------------------
+# EODHD data
+# ---------------------------------------------------------------------------
+_EODHD_BASE_URL = 'https://eodhd.com/api'
+
+
+def _eodhd_prices(
+    ticker: str,
+    api_key: str,
+    start: str = '2007-01-01',
+    proxy: Optional[str] = None,
+) -> pd.Series:
+    """Fetch monthly adjusted close prices for a US ticker from EODHD."""
+    url = f'{_EODHD_BASE_URL}/eod/{ticker}.US'
+    params = {
+        'from': start,
+        'period': 'm',
+        'api_token': api_key,
+        'fmt': 'json',
+        'order': 'a',
+    }
+    proxies = {'http': proxy, 'https': proxy} if proxy else None
+    resp = requests.get(url, params=params, proxies=proxies, timeout=30)
+    data = resp.json()
+
+    if isinstance(data, dict) and ('error' in data or 'message' in data):
+        raise RuntimeError(f'EODHD error for {ticker}: {data}')
+    if not data:
+        raise RuntimeError(f'EODHD returned no data for {ticker}')
+
+    series = pd.Series(
+        {r['date']: r['adjusted_close'] for r in data}
+    ).rename(ticker).sort_index()
+    series.index = pd.to_datetime(series.index)
+    return series
+
+
+def load_asset_data_eodhd(
+    api_key: str,
+    assets: Optional[list[str]] = None,
+    start: str = '2007-01-01',
+    end: Optional[str] = None,
+    proxy: Optional[str] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load asset price data from EODHD and macro predictors from FRED.
+
+    Parameters
+    ----------
+    api_key : EODHD API key (register at eodhd.com)
+    assets  : list of ETF ticker symbols (default: ASSETS from config)
+    start   : start date for filtering
+    end     : end date for filtering (default: today)
+    proxy   : optional proxy URL
+
+    Returns
+    -------
+    df       : monthly asset prices (BM frequency)
+    macro_df : monthly macro predictors (tbl, lty, aaa, baa, dp)
+    raw      : monthly DataFrame with all asset prices
+    """
+    if assets is None:
+        assets = ASSETS
+
+    extra_tickers = [t for t in ['VCLT'] if t not in assets]
+    download_tickers = assets + extra_tickers
+
+    price_series = []
+    for ticker in download_tickers:
+        price_series.append(_eodhd_prices(ticker, api_key, start=start, proxy=proxy))
+
+    raw = pd.DataFrame(price_series).T
+    raw.index = pd.to_datetime(raw.index)
+    raw.index.name = 'Date'
+    raw = raw.sort_index()
+
+    if end:
+        raw = raw.loc[:end]
+
+    df = raw[assets].resample('BM').last()
+
+    # --- Macro predictors from FRED ---
+    kwargs: dict = {}
+    session = _make_session(proxy)
+    if session is not None:
+        kwargs['session'] = session
+
+    macro_parts = {}
+    for name, fred_code in _FRED_MACRO_CODES.items():
+        series = web.DataReader(fred_code, 'fred', start=start, **kwargs)
+        macro_parts[name] = series.iloc[:, 0]
+
+    macro_raw = pd.DataFrame(macro_parts)
+
+    # Dividend-price ratio (dp) from EODHD dividends
+    sp_ticker = 'VOO' if 'VOO' in assets else 'SPY'
+    div_url = f'{_EODHD_BASE_URL}/div/{sp_ticker}.US'
+    div_params = {
+        'from': start,
+        'api_token': api_key,
+        'fmt': 'json',
+    }
+    proxies = {'http': proxy, 'https': proxy} if proxy else None
+    div_resp = requests.get(div_url, params=div_params, proxies=proxies, timeout=30)
+    div_data = div_resp.json()
+
+    if isinstance(div_data, list) and len(div_data) > 0:
+        divs = pd.Series(
+            {r['date']: float(r['value']) for r in div_data}
+        ).sort_index()
+        divs.index = pd.to_datetime(divs.index)
+        annual_div = divs.resample('BM').sum().rolling(12).sum()
+        sp_price = raw[sp_ticker].resample('BM').last()
+        dp = (annual_div / sp_price * 100).dropna()
+        dp.name = 'dp'
+        macro_raw = macro_raw.join(dp)
+    else:
+        macro_raw['dp'] = np.nan
+
+    macro_df = macro_raw.resample('BM').last()
+
+    return df, macro_df, raw
+
+
+# ---------------------------------------------------------------------------
 # Derived series
 # ---------------------------------------------------------------------------
 def build_returns(
@@ -345,17 +597,21 @@ def load_all(
     proxy: Optional[str] = None,
     assets: Optional[list[str]] = None,
     source: str = 'excel',
+    av_api_key: Optional[str] = None,
+    eodhd_api_key: Optional[str] = None,
 ) -> dict:
     """
     Load and assemble all datasets.
 
     Parameters
     ----------
-    data_file : path to the Excel data file (default: DATA_DIR / 'mas_dataset.xlsx')
-    ff_start  : start date for Fama-French download
-    proxy     : optional proxy URL, e.g. 'http://host:port'
-    assets    : asset ticker list (default: ASSETS from config)
-    source    : 'excel' (default) or 'yfinance'
+    data_file      : path to the Excel data file (default: DATA_DIR / 'mas_dataset.xlsx')
+    ff_start       : start date for Fama-French download
+    proxy          : optional proxy URL, e.g. 'http://host:port'
+    assets         : asset ticker list (default: ASSETS from config)
+    source         : 'excel' (default), 'yfinance', 'alphavantage', or 'eodhd'
+    av_api_key     : Alpha Vantage API key (required when source='alphavantage')
+    eodhd_api_key  : EODHD API key (required when source='eodhd')
 
     Returns
     -------
@@ -368,7 +624,19 @@ def load_all(
     """
     fivefactor, riskfree, mkt_daily = load_ff_factors(start=ff_start, proxy=proxy)
 
-    if source == 'yfinance':
+    if source == 'eodhd':
+        if eodhd_api_key is None:
+            raise ValueError("eodhd_api_key is required when source='eodhd'")
+        df, macro_df, raw = load_asset_data_eodhd(
+            api_key=eodhd_api_key, assets=assets, start=ff_start, proxy=proxy,
+        )
+    elif source == 'alphavantage':
+        if av_api_key is None:
+            raise ValueError("av_api_key is required when source='alphavantage'")
+        df, macro_df, raw = load_asset_data_alphavantage(
+            api_key=av_api_key, assets=assets, start=ff_start, proxy=proxy,
+        )
+    elif source == 'yfinance':
         df, macro_df, raw = load_asset_data_yfinance(
             assets=assets, start=ff_start, proxy=proxy,
         )
