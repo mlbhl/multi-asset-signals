@@ -126,10 +126,10 @@ def generate_results(
 
     # --- 3. Combined weights ---
     comb_ls = generate_average_weight(
-        list(weights_ls.values()), holding=config.holding_comb
+        [weights_ls[s] for s in config.comb_signals], holding=config.holding_comb
     )
     comb_lo = generate_average_weight(
-        list(weights_lo.values()), holding=config.holding_comb
+        [weights_lo[s] for s in config.comb_signals], holding=config.holding_comb
     )
     weights_ls['comb'] = comb_ls
     weights_lo['comb'] = comb_lo

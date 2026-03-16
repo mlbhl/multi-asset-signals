@@ -228,8 +228,9 @@ def main() -> None:
         _write(_latest_weights(weights_lo), 'weights_lo_latest')
         _write(picks_ls,          'picks_ls')
         _write(picks_lo,          'picks_lo')
-        _write(weights_ls['comb'], 'weights_ls_comb_hist')
-        _write(weights_lo['comb'], 'weights_lo_comb_hist')
+        for sig in ['mom', 'rev', 'seas', 'ftrd', 'strd', 'comb']:
+            _write(weights_ls[sig], f'weights_ls_{sig}_hist')
+            _write(weights_lo[sig], f'weights_lo_{sig}_hist')
 
     print("Done.")
 

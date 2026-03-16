@@ -136,6 +136,11 @@ def generate_cs_weight(
         scaled = calc_ranknorm(signal)
         eps    = 1e-6  # guard against floating-point boundary issues
 
+        # Need at least `quant` valid assets to form quantile groups;
+        # rows with fewer valid assets get NaN so weights become zero.
+        valid_count = signal.notna().sum(axis=1)
+        scaled.loc[valid_count < quant] = np.nan
+
         ls_wgt = scaled.copy()
         ls_wgt[ls_wgt > 1 - 1 / quant + eps] =  1
         ls_wgt[ls_wgt < 1 / quant - eps]      = -1
@@ -190,6 +195,16 @@ def generate_cs_weight(
         ls_wgt.rolling(holding, min_periods=holding).mean().dropna()
     )
     lo_wgt = lo_wgt.rolling(holding, min_periods=holding).mean().dropna()
+
+    # Drop leading all-zero rows (e.g. when early data has too few assets)
+    def _drop_leading_zeros(w: pd.DataFrame) -> pd.DataFrame:
+        has_nonzero = (w != 0).any(axis=1)
+        if has_nonzero.any():
+            return w.loc[has_nonzero.idxmax():]
+        return w
+
+    ls_wgt = _drop_leading_zeros(ls_wgt)
+    lo_wgt = _drop_leading_zeros(lo_wgt)
 
     return ls_wgt, lo_wgt
 
@@ -259,6 +274,8 @@ def generate_average_weight(
     has_short = (avg_wgt < 0).any(axis=1).any()
     if has_short:
         gross = avg_wgt.abs().sum(axis=1)
+        gross = gross.replace(0, np.nan)
         avg_wgt = avg_wgt.mul(2 / gross, axis=0)
+        avg_wgt = avg_wgt.fillna(0)
 
     return avg_wgt

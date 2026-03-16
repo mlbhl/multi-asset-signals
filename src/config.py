@@ -55,6 +55,10 @@ class ModelConfig:
     method:   str = 'quantile'  # 'quantile' | 'proportion' | 'rank'
     quantile: str = 'tercile'   # 'median' | 'tercile' | 'quartile' | 'quintile' | 'decile'
 
+    # --- Signals to combine into 'comb' portfolio ---
+    # comb_signals: tuple[str, ...] = ('mom', 'rev', 'seas', 'ftrd', 'strd')
+    comb_signals: tuple[str, ...] = ('mom', 'seas', 'strd')
+
     # --- Transaction costs (one-way) ---
     tcost: float = 0.001
 
